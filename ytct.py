@@ -37,6 +37,7 @@ def get_arguments():
     parser.add_argument("-r", "--reverse", action="store_true", help="download posts from oldest to newest")
     parser.add_argument("links", metavar="CHANNEL", nargs="*", help="youtube channel or community post link/id")
     parser.add_argument("--skip-download", action="store_true", help="skip downloading posts, intended for writing log")
+    parser.add_argument("--require-login", action="store_true", help="exit with an error unless the --cookies file loads and YouTube accepts it as a logged-in session")
     return parser.parse_args()
 
 def use_default_cookies():
@@ -61,13 +62,19 @@ def use_cookies(cookie_jar_path):
     except FileNotFoundError:
         use_default_cookies()
         print_log("ytct", f"could not find cookies file {cookie_jar_path}, continuing without cookies...")
-        return
+        return False
     except (cookiejar.LoadError, OSError) as e:
         use_default_cookies()
         print_log("ytct", f"{e}")
         print_log("ytct", f"failed to load cookies from {cookie_jar_path}, continuing without cookies")
-        return
+        return False
     requests_cache.cookies = cookie_jar
+    return True
+
+def is_logged_in():
+    with requests_cache.cache_disabled():
+        r = requests_cache.get("https://www.youtube.com/", headers={"Accept-Language": "en-US,en;q=0.9"})
+    return r.ok and '"LOGGED_IN":true' in r.text
 
 def get_channel_id_from_handle(channel_handle):
     handle_url = f"https://youtube.com/{channel_handle}"
@@ -275,10 +282,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     args = get_arguments()
     # set cookies for retrieving posts that need auth
+    cookies_loaded = False
     if args.cookies:
-        use_cookies(args.cookies)
+        cookies_loaded = use_cookies(args.cookies)
     else:
         use_default_cookies()
+    if args.require_login:
+        if not cookies_loaded:
+            print_log("ytct", "--require-login: no usable --cookies file")
+            sys.exit(1)
+        if not is_logged_in():
+            print_log("ytct", "--require-login: YouTube does not accept the cookies as logged in, re-export them")
+            sys.exit(1)
+        print_log("ytct", "logged in")
     usable_archive = None
     if args.post_archive:
         #making sure the directory of the log exists, create if necessary
