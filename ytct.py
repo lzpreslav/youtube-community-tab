@@ -28,6 +28,7 @@ TIME_FACTORS={
 }
 
 args = None
+log_channel = None
 
 def get_arguments():
     parser.add_argument("--cookies", metavar="COOKIES FILE", type=str, help="path to a Netscape format cookies file where cookies will be read from/written to")
@@ -105,14 +106,17 @@ def get_post(post_id, post_archive):
             archive_file.write(f"{post_id}\n")
 
 def get_channel_posts(channel_id, post_archive):
+    global log_channel
+    log_channel = channel_id
     ct = CommunityTab(channel_id)
     page_count = 1
-    print_log("community tab", f"getting posts from community tab (page {page_count})", debug=True)
     ct.load_posts(0)
+    log_channel = ct.channel_handle or channel_id
+    print_log("community tab", f"fetched page {page_count}", debug=True)
     while(ct.posts_continuation_token):
         page_count += 1
-        print_log("community tab", f"getting posts from community tab (page {page_count})", debug=True)
         ct.load_posts(0)
+        print_log("community tab", f"fetched page {page_count}", debug=True)
     print_log("community tab", f"found {len(ct.posts)} posts ({page_count} pages)")
     # only read the archive once
     skip_ids = []
@@ -133,6 +137,7 @@ def get_channel_posts(channel_id, post_archive):
             with open(post_archive, "a") as archive_file:
                 archive_file.write(f"{post.post_id}\n")
     print_log("community tab", f"saved {new_posts} new posts")
+    log_channel = None
 
 def handle_post(post):
     post_j = post.as_json()
@@ -281,7 +286,8 @@ def clean_name(text):
 def print_log(component, message, debug=False):
     if debug and not (args and args.verbose):
         return
-    print(f"[{component}] {message}")
+    prefix = f"[{log_channel}] " if log_channel else ""
+    print(f"{prefix}[{component}] {message}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
