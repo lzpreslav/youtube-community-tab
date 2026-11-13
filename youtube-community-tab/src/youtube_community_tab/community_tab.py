@@ -29,6 +29,7 @@ class CommunityTab(object):
         self.posts = []
         self.community_url = None
         self.channel_id = None
+        self.channel_handle = None
 
     def load_posts(self, expire_after=0):
         headers = {
@@ -59,6 +60,9 @@ class CommunityTab(object):
 
                 if self.channel_id is None:
                     self.channel_id = data["metadata"]["channelMetadataRenderer"]["externalId"]
+                vanity_url = safely_get_value_from_key(data, "metadata", "channelMetadataRenderer", "vanityChannelUrl", default="") or ""
+                handle = vanity_url.rstrip("/").rsplit("/", 1)[-1]
+                self.channel_handle = handle if handle.startswith("@") else None
 
             except IndexError as e:
                 print("[Can't find yt_initial_data using the regex]")
