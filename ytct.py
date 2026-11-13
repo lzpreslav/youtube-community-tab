@@ -37,6 +37,7 @@ def get_arguments():
     parser.add_argument("-r", "--reverse", action="store_true", help="download posts from oldest to newest")
     parser.add_argument("links", metavar="CHANNEL", nargs="*", help="youtube channel or community post link/id")
     parser.add_argument("--skip-download", action="store_true", help="skip downloading posts, intended for writing log")
+    parser.add_argument("-v", "--verbose", action="store_true", help="also log per-page and per-post progress")
     parser.add_argument("--require-login", action="store_true", help="exit with an error unless the --cookies file loads and YouTube accepts it as a logged-in session")
     return parser.parse_args()
 
@@ -95,7 +96,7 @@ def get_post(post_id, post_archive):
         with open(post_archive, "r") as archive_file:
             skip_ids = archive_file.read().splitlines()
         if post_id in skip_ids:
-            print_log(f"post:{post_id}", f"already recorded in archive")
+            print_log(f"post:{post_id}", f"already recorded in archive", debug=True)
             return
     post = Post.from_post_id(post_id)
     handle_post(post)
@@ -106,14 +107,13 @@ def get_post(post_id, post_archive):
 def get_channel_posts(channel_id, post_archive):
     ct = CommunityTab(channel_id)
     page_count = 1
-    print_log("community tab", f"getting posts from community tab (page {page_count})", "\r")
+    print_log("community tab", f"getting posts from community tab (page {page_count})", debug=True)
     ct.load_posts(0)
     while(ct.posts_continuation_token):
         page_count += 1
-        print_log("community tab", f"getting posts from community tab (page {page_count})", "\r")
+        print_log("community tab", f"getting posts from community tab (page {page_count})", debug=True)
         ct.load_posts(0)
-    print_log("community tab", f"getting posts from community tab (page {page_count})")
-    print_log("community tab", f"found {len(ct.posts)} posts")
+    print_log("community tab", f"found {len(ct.posts)} posts ({page_count} pages)")
     # only read the archive once
     skip_ids = []
     if post_archive:
@@ -121,15 +121,18 @@ def get_channel_posts(channel_id, post_archive):
             skip_ids = archive_file.read().splitlines()
     if args.reverse:
         ct.posts = reversed(ct.posts)
+    new_posts = 0
     for post in ct.posts:
         if len(skip_ids) > 0 and post.post_id in skip_ids:
-            print_log(f"post:{post.post_id}", f"already recorded in archive")
+            print_log(f"post:{post.post_id}", f"already recorded in archive", debug=True)
             continue
-        if not args.skip_download:    
+        if not args.skip_download:
             handle_post(post)
+            new_posts += 1
         if post_archive:
             with open(post_archive, "a") as archive_file:
                 archive_file.write(f"{post.post_id}\n")
+    print_log("community tab", f"saved {new_posts} new posts")
 
 def handle_post(post):
     post_j = post.as_json()
@@ -149,7 +152,7 @@ def handle_post(post):
             os.makedirs(post_file_dir)
         if os.path.isfile(f"{post_file_path}.json.tmp"):
             os.remove(f"{post_file_path}.json.tmp")
-        print_log(component, f"writing {post_file_name}.json")
+        print_log(component, f"writing {post_file_name}.json", debug=True)
         with open(f"{post_file_path}.json.tmp", "w", encoding='utf8') as post_file:
             post_file.write(json.dumps(post_j, ensure_ascii=False))
         if os.path.isfile(f"{post_file_path}.json"):
@@ -229,11 +232,11 @@ def get_time_diff_from_text(published_text):
 def handle_post_attachments(component, attachment, path):
     if "postMultiImageRenderer" in attachment:
         num_images = len(attachment["postMultiImageRenderer"]["images"])
-        print_log(component, f"downloading {num_images} attached images")
+        print_log(component, f"downloading {num_images} attached images", debug=True)
         for image_i in range(0, num_images):
             handle_post_attachments(component, attachment["postMultiImageRenderer"]["images"][image_i], f"{path}_{image_i}")
     elif "backstageImageRenderer" in attachment:
-        print_log(component, f"downloading image")
+        print_log(component, f"downloading image", debug=True)
         image_url = attachment["backstageImageRenderer"]["image"]["thumbnails"][-1]["url"].split("=", 1)[0] + "=s0?imgmax=0"
         image_r = requests.get(image_url, stream=True, allow_redirects=True)
         image_ext = image_r.headers["Content-Type"].split("/", 1)[1].replace("jpeg", "jpg")
@@ -246,7 +249,7 @@ def handle_post_attachments(component, attachment, path):
                     image_file.write(chunk)
             os.rename(f"{image_path}.tmp", image_path)
         else:
-            print_log(component, "image already downloaded, skipping")
+            print_log(component, "image already downloaded, skipping", debug=True)
     elif "videoRenderer" in attachment:
         thumb_url = None
         if "videoId" in attachment["videoRenderer"]:
@@ -256,7 +259,7 @@ def handle_post_attachments(component, attachment, path):
             thumb_url = urlparse.urljoin(attachment["videoRenderer"]["thumbnail"]["thumbnails"][-1]["url"], "maxresdefault.jpg")
             print_log(component, "could not get video ID, video may be private or deleted")
         if thumb_url:
-            print_log(component, f"downloading thumbnail")
+            print_log(component, f"downloading thumbnail", debug=True)
             thumb_r = requests.get(thumb_url, stream=True, allow_redirects=True)
             thumb_ext = thumb_r.headers["Content-Type"].split("/", 1)[1].replace("jpeg", "jpg")
             thumb_path = f"{path}_thumb.{thumb_ext}"
@@ -268,15 +271,17 @@ def handle_post_attachments(component, attachment, path):
                         thumb_file.write(chunk)
                 os.rename(f"{thumb_path}.tmp", thumb_path)
             else:
-                print_log(component, "thumbnail already downloaded, skipping")
+                print_log(component, "thumbnail already downloaded, skipping", debug=True)
         else:
             print_log(component, "could not get video thumbnail url for post")
 
 def clean_name(text):
     return re.sub(CLEAN_FILENAME_KINDA, "_", text)
 
-def print_log(component, message, end="\n"):
-    print(f"[{component}] {message}", end=end)
+def print_log(component, message, debug=False):
+    if debug and not (args and args.verbose):
+        return
+    print(f"[{component}] {message}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
