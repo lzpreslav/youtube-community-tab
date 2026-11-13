@@ -5,6 +5,9 @@ from base64 import urlsafe_b64encode
 
 from .helpers.clean_items import clean_content_text, clean_backstage_attachment
 from .helpers.utils import safely_get_value_from_key, search_key, get_auth_header, CLIENT_VERSION
+from .helpers.comment_entities import (
+    get_comment_entities, get_continuation_items, get_replies_continuation, resolve_thread_comment
+)
 from .requests_handler import requests_cache
 from .comment import Comment
 
@@ -178,59 +181,47 @@ class Post(object):
 
             data = r.json()
             if self.first:
-                if "continuationItems" not in data["onResponseReceivedEndpoints"][1]["reloadContinuationItemsCommand"]:
-                    # There are no comments
-                    continuation_items = []
-                else:
-                    append = data["onResponseReceivedEndpoints"][1]["reloadContinuationItemsCommand"]
-                    continuation_items = safely_get_value_from_key(append, "continuationItems", default=[])
-                    self.first = False
+                continuation_items = get_continuation_items(data, "reloadContinuationItemsCommand")
+                self.first = False
             else:
-                append = data["onResponseReceivedEndpoints"][0]["appendContinuationItemsAction"]
-                continuation_items = safely_get_value_from_key(append, "continuationItems", default=[])
+                continuation_items = get_continuation_items(data, "appendContinuationItemsAction")
+
+            if continuation_items is None:
+                continuation_items = get_continuation_items(data, "appendContinuationItemsAction") or []
 
             self.click_tracking_params = data["trackingParams"]
-            self.append_comments_from_items(continuation_items)
+            self.append_comments_from_items(continuation_items, get_comment_entities(data))
 
-    def append_comments_from_items(self, items):
+    def append_comments_from_items(self, items, entities=None):
+        entities = entities or {}
         there_is_no_continuation_token = True
         for item in items:
             kind = list(item.keys())[0]
 
             if kind == "commentThreadRenderer":
+                thread = item[kind]
+                comment_data = resolve_thread_comment(thread, entities)
+                if comment_data is None:
+                    continue
+                replies_token, replies_click_tracking_params = get_replies_continuation(thread)
                 self.comments.append(
                     Comment.from_data(
-                        item[kind]["comment"]["commentRenderer"],
+                        comment_data,
                         self.post_id,
                         self.channel_id,
-                        safely_get_value_from_key(
-                            item[kind],
-                            "replies",
-                            "commentRepliesRenderer",
-                            "contents",
-                            0,
-                            "continuationItemRenderer",
-                            "continuationEndpoint",
-                            "continuationCommand",
-                            "token"
-                        ),
-                        safely_get_value_from_key(
-                            item[kind],
-                            "replies",
-                            "commentRepliesRenderer",
-                            "contents",
-                            0,
-                            "continuationItemRenderer",
-                            "continuationEndpoint",
-                            "clickTrackingParams"
-                        ),
+                        replies_token,
+                        replies_click_tracking_params,
                         self.visitor_data,
                         self.session_index
                     )
                 )
             elif kind == "continuationItemRenderer":
-                self.comments_continuation_token = item[kind]["continuationEndpoint"]["continuationCommand"]["token"]
-                there_is_no_continuation_token = False
+                token = safely_get_value_from_key(item[kind], "continuationEndpoint", "continuationCommand", "token") or safely_get_value_from_key(
+                    item[kind], "button", "buttonRenderer", "command", "continuationCommand", "token"
+                )
+                if token:
+                    self.comments_continuation_token = token
+                    there_is_no_continuation_token = False
 
         if there_is_no_continuation_token:
             self.comments_continuation_token = False
@@ -288,7 +279,14 @@ class Post(object):
 
         try:
             data = r.json()
-            comment_id = search_key("comment", data)[0][1]["commentRenderer"]["commentId"]
+            found = search_key("commentRenderer", data) + search_key("commentViewModel", data)
+            comment_id = next(
+                (value["commentId"] for _, value in found if isinstance(value, dict) and "commentId" in value),
+                None
+            )
+            if comment_id is None:
+                entities = get_comment_entities(data)
+                comment_id = next(iter(entities.values()))["properties"]["commentId"]
 
             return Comment.from_ids(comment_id, self.post_id, self.channel_id)
         except Exception as e:

@@ -4,6 +4,7 @@ from base64 import urlsafe_b64encode
 
 from .requests_handler import requests_cache
 from .helpers.utils import safely_get_value_from_key, get_auth_header, CLIENT_VERSION
+from .helpers.comment_entities import get_comment_entities, get_continuation_items, get_replies_continuation, resolve_comment, resolve_thread_comment
 from .reply import Reply
 
 
@@ -101,19 +102,21 @@ class Comment(object):
             r = requests_cache.post(Comment.FORMAT_URLS["BROWSE_ENDPOINT"], json=json_body, expire_after=expire_after, headers=headers)
 
             data = r.json()
-            append = data["onResponseReceivedEndpoints"][0]["appendContinuationItemsAction"]
-            self.click_tracking_params = data["trackingParams"]
-            continuation_items = safely_get_value_from_key(append, "continuationItems", default=[])
+            self.click_tracking_params = data.get("trackingParams", self.click_tracking_params)
+            continuation_items = get_continuation_items(data, "appendContinuationItemsAction") or []
 
-            self.append_replies_from_items(continuation_items)
+            self.append_replies_from_items(continuation_items, get_comment_entities(data))
 
-    def append_replies_from_items(self, items):
+    def append_replies_from_items(self, items, entities=None):
+        entities = entities or {}
         there_is_no_continuation_token = True
         for item in items:
             kind = list(item.keys())[0]
 
-            if kind == "commentRenderer":
-                self.replies.append(Reply.from_data(item[kind]))
+            if kind in ("commentRenderer", "commentViewModel"):
+                reply_data = resolve_comment(item[kind], entities)
+                if reply_data is not None:
+                    self.replies.append(Reply.from_data(reply_data))
             elif kind == "continuationItemRenderer":
                 if "continuationEndpoint" in item[kind]:
                     self.replies_continuation_token = item[kind]["continuationEndpoint"]["continuationCommand"]["token"]
@@ -224,38 +227,27 @@ class Comment(object):
 
         r = requests_cache.post(Comment.FORMAT_URLS["BROWSE_ENDPOINT"], json=json_body, expire_after=expire_after, headers=headers)
 
-        comment_data = safely_get_value_from_key(
-            r.json(), "onResponseReceivedEndpoints", 1, "reloadContinuationItemsCommand", "continuationItems", 0, "commentThreadRenderer"
-        )
+        data = r.json()
+        threads = [
+            item["commentThreadRenderer"]
+            for item in get_continuation_items(data, "reloadContinuationItemsCommand") or []
+            if "commentThreadRenderer" in item
+        ]
 
-        if comment_data is not None:
+        if threads:
+            thread = threads[0]
+            comment_data = resolve_thread_comment(thread, get_comment_entities(data))
+            if comment_data is None:
+                return None
+            replies_token, replies_click_tracking_params = get_replies_continuation(thread)
             return Comment.from_data(
-                comment_data["comment"]["commentRenderer"],
+                comment_data,
                 post_id,
                 channel_id,
-                safely_get_value_from_key(
-                    comment_data,
-                    "replies",
-                    "commentRepliesRenderer",
-                    "contents",
-                    0,
-                    "continuationItemRenderer",
-                    "continuationEndpoint",
-                    "continuationCommand",
-                    "token"
-                ),
-                safely_get_value_from_key(
-                    comment_data,
-                    "replies",
-                    "commentRepliesRenderer",
-                    "contents",
-                    0,
-                    "continuationItemRenderer",
-                    "continuationEndpoint",
-                    "clickTrackingParams"
-                ),
+                replies_token,
+                replies_click_tracking_params,
                 None,
-                None
+                "0"
             )
 
     @staticmethod
