@@ -11,6 +11,7 @@ import urllib.parse as urlparse
 from youtube_community_tab.requests_handler import requests_cache
 from youtube_community_tab.post import Post
 from youtube_community_tab.community_tab import CommunityTab
+import ytct_view
 
 POST_REGEX=r"^(?:(?:https?:\/\/)?(?:.*?\.)?(?:youtube\.com\/)((?:channel\/UC[a-zA-Z0-9_-]+\/community\?lb=)|post\/))?(?P<post_id>Ug[a-zA-Z0-9_-]+)(.*)?$"
 CHANNEL_REGEX=r"^(?:(?:https?:\/\/)?(?:.*?\.)?(?:youtube\.com\/))((?P<channel_handle>@[a-zA-Z0-9_-]+)|((channel\/)?(?P<channel_id>UC[a-zA-Z0-9_-]+)))(?:\/.*)?$"
@@ -40,6 +41,7 @@ def get_arguments():
     parser.add_argument("--skip-download", action="store_true", help="skip downloading posts, intended for writing log")
     parser.add_argument("-v", "--verbose", action="store_true", help="also log per-page and per-post progress")
     parser.add_argument("--require-login", action="store_true", help="exit with an error unless the --cookies file loads and YouTube accepts it as a logged-in session")
+    parser.add_argument("--write-index", action="store_true", help="write a browsable index.html into the save directory after downloading")
     return parser.parse_args()
 
 def use_default_cookies():
@@ -342,4 +344,7 @@ if __name__ == "__main__":
             get_channel_posts(channel_id, usable_archive)
         else:
             print_log("ytct", f"could not parse link/id {link}")
+    if args.write_index:
+        ytct_view.write_channel(args.directory)
+        print_log("ytct", "wrote index.html")
     print_log("ytct", "finished")

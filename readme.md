@@ -29,4 +29,17 @@ OR
                               and record the IDs of newly downloaded posts
 --dates                       write information about the post publish date
 -r, --reverse                 set download order from oldest to newest post.
+--write-index                 write a browsable index.html into the save directory
+                              after downloading
 ```
+
+## Browsing downloads
+
+`ytct_view.py` turns downloaded posts into static `index.html` pages that you open directly in a browser, or serve with any static file server.
+
+```sh
+python ytct_view.py "./Ninomae Ina_nis Ch. hololive-EN"   # one channel
+python ytct_view.py ./archive                             # every channel folder in ./archive, plus a channel list
+```
+
+Pass `--write-index` to `ytct.py` to rebuild a channel's page after each scrape. Publish dates are only shown for posts downloaded with `--dates`.

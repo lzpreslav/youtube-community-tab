@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Community Post Archive</title>
+<style>
+:root {
+  --bg: #111;
+  --card: #1b1b1b;
+  --line: #2c2c2c;
+  --fg: #e6e6e6;
+  --muted: #999;
+  --link: #7ab7ff;
+  --member: #6fcf7a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+.wrap {
+  max-width: 640px; margin: 0 auto; padding-block: 16px 48px;
+  padding-inline: 16px;
+}
+h1 { font-size: 20px; margin: 8px 0 2px; }
+.muted { color: var(--muted); font-size: 13px; }
+a { color: var(--link); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.controls input, .controls select {
+  font: inherit; color: var(--fg); background: var(--card);
+  border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px;
+}
+.controls input { flex: 1 1 200px; min-width: 0; }
+.post { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+.head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.name { font-weight: 600; }
+.member { color: var(--member); font-size: 12px; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; }
+.images { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 4px; }
+.images.one { grid-template-columns: 1fr; }
+.images img { display: block; width: 100%; }
+.poll div { border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; margin-bottom: 4px; }
+.video { display: flex; gap: 10px; align-items: flex-start; }
+.video img { width: 160px; max-width: 40%; }
+.shared { border-left: 2px solid var(--line); padding-left: 10px; margin: 8px 0; }
+.foot { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 12px; margin-top: 8px; }
+.foot code { overflow-wrap: anywhere; }
+:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+  <h1 id="title"></h1>
+  <div class="muted" id="summary"></div>
+  <div class="controls">
+    <input id="q" type="search" placeholder="Search" aria-label="Search posts">
+    <select id="filter" aria-label="Filter">
+      <option value="all">All posts</option>
+      <option value="members">Members-only</option>
+      <option value="image">Images</option>
+      <option value="poll">Polls</option>
+      <option value="video">Videos</option>
+      <option value="shared">Shared</option>
+    </select>
+    <select id="sort" aria-label="Sort">
+      <option value="new">Newest first</option>
+      <option value="old">Oldest first</option>
+    </select>
+  </div>
+  <div id="feed"></div>
+</div>
+
+<script>
+const POSTS = /*__POSTS__*/[];
+
+const txt = v => !v ? "" : typeof v === "string" ? v : v.simpleText != null ? v.simpleText : (v.runs || []).map(r => r.text || "").join("");
+const fileUrl = f => "./" + encodeURIComponent(f);
+const safeUrl = u => { try { const x = new URL(u, "https://www.youtube.com"); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) e.setAttribute(k, v);
+  for (const k of kids.flat()) if (k != null && k !== false) e.append(k);
+  return e;
+}
+
+// ytct --dates stores e.g. "3 days ago" plus the time it was downloaded
+const UNIT = { second: 1, minute: 60, hour: 3600, day: 86400, week: 604800, month: 2629800, year: 31557600 };
+function postDate(p) {
+  const pub = p._published;
+  if (!pub || !pub.lastPublishedString) return null;
+  const m = /(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago/i.exec(pub.lastPublishedString);
+  if (!m) return { label: pub.lastPublishedString, ts: null };
+  const ts = (pub.lastUpdatedTimestamp - m[1] * UNIT[m[2].toLowerCase()]) * 1000;
+  const opts = m[2] === "year" ? { year: "numeric" } : m[2] === "month" ? { year: "numeric", month: "short" } : { dateStyle: "medium" };
+  return { ts, label: "~" + new Date(ts).toLocaleDateString(undefined, opts) + (/edited/i.test(pub.lastPublishedString) ? " (edited)" : "") };
+}
+function kind(p) {
+  const a = p.backstage_attachment || {};
+  return a.pollRenderer ? "poll" : a.videoRenderer ? "video" : (a.backstageImageRenderer || a.postMultiImageRenderer) ? "image" : "text";
+}
+
+const byId = new Map(POSTS.map(p => [p.post_id, p]));
+const sharedOnly = new Set(POSTS.filter(p => p.original_post).map(p => p.original_post.post_id));
+const feedPosts = POSTS.filter(p => !sharedOnly.has(p.post_id));
+for (const p of POSTS) {
+  p._d = postDate(p);
+  p._sort = (p._d && p._d.ts) || p._mtime * 1000;
+  const a = p.backstage_attachment || {};
+  p._search = [p.post_id, txt(p.content_text), txt(p.original_post && p.original_post.content_text),
+    ...((a.pollRenderer && a.pollRenderer.choices) || []).map(c => txt(c.text)), txt(a.videoRenderer && a.videoRenderer.title)].join(" ").toLowerCase();
+}
+
+const first = feedPosts[0] || POSTS[0];
+const channel = txt(first && first.author && first.author.authorText) || "Community posts";
+document.title = channel + " · posts";
+document.getElementById("title").textContent = channel;
+document.getElementById("summary").textContent =
+  `${feedPosts.length} posts · ${feedPosts.filter(p => p.sponsor_only_badge).length} members-only`;
+
+function body(p) {
+  const files = (byId.get(p.post_id) || {})._files || { images: [], thumb: null };
+  const a = p.backstage_attachment || {};
+  const d = p._d || postDate(p);
+  const out = [el("div", { class: "head" },
+    el("span", null, el("span", { class: "name" }, txt(p.author && p.author.authorText) || "Unknown"),
+      p.sponsor_only_badge ? el("span", { class: "member" }, "  members only") : null),
+    d ? el("span", { class: "muted" }, d.label) : null)];
+
+  const t = el("div", { class: "text" });
+  for (const r of (p.content_text && p.content_text.runs) || []) {
+    const href = safeUrl((r.urlEndpoint && r.urlEndpoint.url) || (r.browseEndpoint && r.browseEndpoint.url) || "");
+    t.append(href && (r.urlEndpoint || r.browseEndpoint) ? el("a", { href, target: "_blank", rel: "noopener" }, r.text) : (r.text || ""));
+  }
+  if (t.childNodes.length) out.push(t);
+
+  if (a.backstageImageRenderer || a.postMultiImageRenderer) {
+    out.push(files.images.length
+      ? el("div", { class: "images" + (files.images.length === 1 ? " one" : "") },
+          files.images.map(f => el("a", { href: fileUrl(f), target: "_blank", rel: "noopener" }, el("img", { src: fileUrl(f), alt: "", loading: "lazy" }))))
+      : el("div", { class: "muted" }, "[image not downloaded]"));
+  } else if (a.videoRenderer) {
+    const v = a.videoRenderer;
+    const href = safeUrl((v.watchEndpoint && v.watchEndpoint.url) || (v.videoId ? "/watch?v=" + v.videoId : ""));
+    out.push(el("div", { class: "video" },
+      files.thumb ? el("img", { src: fileUrl(files.thumb), alt: "" }) : null,
+      el("div", null, href ? el("a", { href, target: "_blank", rel: "noopener" }, txt(v.title) || "Video") : txt(v.title),
+        el("div", { class: "muted" }, [txt(v.lengthText), txt(v.viewCountText)].filter(Boolean).join(" · ")))));
+  } else if (a.pollRenderer) {
+    out.push(el("div", { class: "poll" }, (a.pollRenderer.choices || []).map(c => el("div", null, txt(c.text))),
+      el("span", { class: "muted" }, txt(a.pollRenderer.totalVotes))));
+  }
+  return out;
+}
+
+function card(p) {
+  return el("div", { class: "post", id: p.post_id },
+    body(p),
+    p.original_post ? el("div", { class: "shared" }, el("div", { class: "muted" }, "Shared post:"), body(p.original_post)) : null,
+    el("div", { class: "foot" },
+      txt(p.vote_count) ? el("span", null, txt(p.vote_count) + " likes") : null,
+      el("a", { href: "https://www.youtube.com/post/" + encodeURIComponent(p.post_id), target: "_blank", rel: "noopener" }, "YouTube"),
+      el("code", null, p.post_id)));
+}
+
+const FILTERS = {
+  all: () => true,
+  members: p => !!p.sponsor_only_badge,
+  image: p => kind(p) === "image",
+  poll: p => kind(p) === "poll",
+  video: p => kind(p) === "video",
+  shared: p => !!p.original_post,
+};
+const q = document.getElementById("q"), filter = document.getElementById("filter"), sort = document.getElementById("sort");
+function render() {
+  const s = q.value.trim().toLowerCase();
+  const list = feedPosts.filter(p => FILTERS[filter.value](p) && (!s || p._search.includes(s)))
+    .sort((a, b) => sort.value === "new" ? b._sort - a._sort : a._sort - b._sort);
+  const feed = document.getElementById("feed");
+  feed.textContent = "";
+  if (!list.length) feed.append(el("p", { class: "muted" }, "No matching posts."));
+  list.forEach(p => feed.append(card(p)));
+}
+q.addEventListener("input", render);
+filter.addEventListener("change", render);
+sort.addEventListener("change", render);
+render();
+</script>
+</html>
